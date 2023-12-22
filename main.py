@@ -4,6 +4,7 @@ import json
 import multiprocessing
 import os
 from re import sub
+import sys
 
 from selenium import webdriver
 from selenium.webdriver.chrome.options import Options
@@ -39,10 +40,28 @@ def obtain_moves(last_move: str, nb_ply: int):
 	driver = webdriver.Chrome(options=chrome_options)
 
 	# Define the URL to scrape
-	url = "https://www.chess.com/explorer?moveList={}&ply={}"
+	url = f"https://www.chess.com/explorer?moveList={last_move}&ply={nb_ply}"
+
+	# Set the PHPSESSID cookie with sys.argv
+	if len(sys.argv) > 1:
+		cookie = {
+			'domain': '.chess.com',
+			'httpOnly': True,
+			'name': 'PHPSESSID',
+			'path': '/',
+			'sameSite': 'Lax',
+			'secure': True,
+			'value': sys.argv[1]}
+
+		# Enables network tracking so we may use Network.setCookie method
+		driver.execute_cdp_cmd('Network.enable', {})
+		# Set the actual cookie
+		driver.execute_cdp_cmd('Network.setCookie', cookie)
+		# Disable network tracking
+		driver.execute_cdp_cmd('Network.disable', {})
 
 	# Open the URL in the web driver
-	driver.get(url.format(last_move, nb_ply))
+	driver.get(url)
 
 	# Wait for the elements to load using WebDriverWait
 	wait = WebDriverWait(driver, 10)  # Adjust the timeout as needed
@@ -62,7 +81,22 @@ def obtain_moves(last_move: str, nb_ply: int):
 
 		# Find the specific elements within the <li> element
 		san_move = soup.find('span', class_='move-san-san').get_text()
-		# list_san = "+".join(filter(None, (last_move, san_move)))
+
+		if not san_move:
+			fig_elem = soup.find('span', class_='move-san-figurine').get('class')[-1]
+
+			if fig_elem.startswith("knight"):
+				san_move = 'N'
+			elif fig_elem.startswith("bishop"):
+				san_move = 'B'
+			elif fig_elem.startswith("rook"):
+				san_move = 'R'
+			elif fig_elem.startswith("queen"):
+				san_move = 'Q'
+			elif fig_elem.startswith("king"):
+				san_move = 'K'
+
+			san_move += soup.find('span', class_='move-san-afterfigurine').get_text()
 
 		nb_played = sub(r"\D", "", soup.find('p', class_='suggested-moves-total-games').get_text())
 		if not nb_played:
@@ -70,35 +104,36 @@ def obtain_moves(last_move: str, nb_ply: int):
 		nb_played = int(nb_played)
 
 		percent = [int(sub(r"\D", "", span.get_text())) for span in soup.find_all('span', class_='suggested-moves-percent-label')]
-		if len(percent) != 3:
-			break
 
 		total_played += nb_played
 
 		if (nb_played >= 0.01 * total_played): # Keep 99% of the best moves
 			# Store the extracted data in a dictionary
-			coef = nb_played * percent[2 if nb_ply % 2 else 0]
+			coef = nb_played * percent[-1 if nb_ply % 2 else 0]
 			total_coef += coef
-			# next_moves['sans'].append(list_san)
 			next_moves['sans'].append(san_move)
 			next_moves['probas'].append(coef)
 
 		else:
 			break
 
+	# Close the web driver
+	driver.quit()
+
+	# print(last_move)
+	# print(next_moves)
+
+	if not next_moves['sans']:
+		exit()
+
 	next_moves['last coord'], next_moves['coords'] = sans2coords(last_move, next_moves['sans'])
 	for i in range(len(next_moves['probas'])):
 		next_moves['probas'][i] /= total_coef
-
-	# Close the web driver
-	driver.quit()
 
 	return last_move, next_moves
 
 
 def multithread_scrapping(max_ply: int = 6):
-
-	assert max_ply <= 6, "You need chess.com Premium for ply over 6.\nLogin is not setup in this scrapper."
 
 	shared_moves = [None] * (max_ply + 1)
 	max_nb_threads = multiprocessing.cpu_count()
@@ -116,7 +151,6 @@ def multithread_scrapping(max_ply: int = 6):
 			with multiprocessing.Pool(processes=max_nb_threads) as pool:
 				# Create multiple processes to add values to the shared list
 
-				# print(shared_moves)
 				processes = []
 				if ply >= 2:
 					for previous_move, previous in shared_moves[ply - 1].items():
@@ -147,4 +181,9 @@ def multithread_scrapping(max_ply: int = 6):
 
 if __name__ == '__main__':
 
-	openings = multithread_scrapping(max_ply=6)
+	max_ply = 15
+
+	if len(sys.argv) <= 1:
+		max_ply = 6
+
+	openings = multithread_scrapping(max_ply=max_ply)
