@@ -170,7 +170,7 @@ def multithread_scrapping(max_ply: int = 6):
 
 				# Wait for all processes to finish
 				for process in processes:
-					last_move, next_moves = process.get(timeout=100)
+					last_move, next_moves = process.get()
 					shared_moves[ply][last_move] = next_moves
 
 			with open(f"ply{ply}.json", "w") as outfile: 
